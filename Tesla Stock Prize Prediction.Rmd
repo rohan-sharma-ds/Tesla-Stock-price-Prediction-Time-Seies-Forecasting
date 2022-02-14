@@ -1,0 +1,510 @@
+---
+title: "Stock Price Time Series"
+author: "-By Rohan Sharma"
+date: "Table of Contents"
+output:
+  html_document:
+    toc: true # table of content true
+    toc_depth: 5  # upto three depths of headings (specified by #, ## and ###)
+    #number_sections: true  ## if you want number sections at each table header
+    theme: united  # many options for theme, this one is my favorite.
+    highlight: tango  # specifies the syntax highlighting style
+---
+
+
+#### Background
+
+I have chosen to work on stock price data of TESLA. I was excited about the sharp rise in the stock price in the last couple of years. I have a desire to invest in stock in the future and this project will give me an idea how accurately i can independently predict stock prices and if i can base my investing decisions on my machine learning capabilities.
+
+I have pulled the data using library quantmod. The data pulled is from 2010 till 2022, by default the quantmod library uses Yahoo as the source for these prices. The pulled data contains opening price, closing price, highest , lowest prices for each day. We will be using closing price of the stock as the target variable for this assignment.
+
+In my opinion, predicting the stock price univariately would be very difficult, this is because a lot of external factors affect stock price as it reflects the the belief of people in the future profitability of a company. We have often seen tweets can also affect stock prices significantly. 
+
+```{r message=FALSE}
+knitr::opts_chunk$set(warning=FALSE,
+                      message=FALSE,
+                      error=FALSE)
+#Load libraries
+library(dplyr)
+library(janitor)
+library(lubridate)
+library(readr)
+library(zoo)
+library(quantmod)
+library(ggplot2)
+library(tseries)
+library(forecast)
+
+  
+
+```
+
+
+```{r}
+univPlots <- function (x){
+        # set up a matrix layout for multiple plots
+        mat <- rbind(1:3, 4:6)
+        layout(mat)
+        # 1
+        plot(x, main='Stock Price scatter')
+        # 2
+        hist(x, main="Stock Price - frequency")
+        # 3
+        boxplot(x, main='boxplot')
+        # 5
+        x.density <- density(x)
+        plot(x.density, main="density plot")
+        polygon(x.density, col="lightblue", border="black")
+        
+		
+	#reset plot layout
+	layout(c(1,1))
+}
+```
+
+
+#### Data Pull
+
+```{r}
+
+getSymbols("TSLA")
+dim(TSLA)
+
+```
+#### Line chart for Tesla Stock Prices
+
+```{r}
+
+chart_Series(TSLA)
+title("Tesla Stock Price (through 2010)",  cex.main = 1,  font.main= 2, col.main= "BLACK")
+
+```
+
+From the above graph, we see that the stock prices are below 100 from 2010 to 2019. However, the prices shoot up from 2020 significantly.
+
+
+##### Line Chart for Tesla Stock Prices - 2019 till Date
+
+```{r}
+
+chart_Series(TSLA['2019-01/2022-01'])
+  title("Tesla Stock Price (through 2019)",  cex.main = 1,  font.main= 2, col.main= "BLACK")
+
+
+```
+
+To deep dive into the stock prices of last two years, we subset that data and plot a line graph. The Values started hiking up from Jan of 2021.There is a drop in prices in mid 2021, and again the prices shoot up in the beginning of the next year.
+
+
+##### Check for Null Values
+```{r}
+colSums(is.na(TSLA))
+```
+
+
+```{r}
+
+tesla <-data.frame(date=index(TSLA), coredata(TSLA))
+str(tesla[])
+```
+From the Description above, we see the datatypes of the variables in the dataset. The Date Column is converted to type Date for further use. The other variables are numeric and we see few records from each of these variables. The dataset consists of 2911 observations and 7 variables in the dataset.
+
+
+##### Subsetting data to have only closing price for analysis 
+
+```{r}
+tesla<-tesla %>% 
+  select(date ,TSLA.Close)
+names(tesla)[2] <- 'closing_price'
+
+str(tesla[])
+```
+Since we are interested in the closing price of the stocks we filter the Closing price and date columns from the dataset.
+
+##### Missing Dates
+```{r}
+
+date_range <- seq(min(tesla$date), max(tesla$date), by = 1) 
+missing_dates<-date_range[!date_range %in% tesla$date] 
+str(missing_dates)
+```
+
+**We observe that weekend dates are missing, we need to keep this in mind when forecasting**
+```{r}
+missing_dates_df <-data.frame(missing_dates)
+
+max(missing_dates_df$missing_dates)
+```
+
+We check for the missing dates in the dataset to see if we have continuous data. We find that the data is available from 2010 to 2022 for weekdays, i.e. monday through friday.
+
+
+#### Univariate charts to understand the disteribution of stock price in the last 12 years 
+
+```{r}
+univPlots(tesla$closing_price)
+```
+
+**Stock-Price Scatter** - This graph aligns with the line graph shown above. The prices are low and pretty much constant from 2010 to 2019 with little fluctuation, while the values hike up after 2019.
+
+**Stock Price- frequency** - This graph shows the frequency of prices. We see that for most of the days the Tesla stock prices lie in the range of 0-100. Since for nearly 10 years of data we collected, the prices are low, hence maximum records fall in this category.
+
+**Boxplot** - This graph shows the distribution of the stock prices, highlighting the outliers. 
+
+**Density Plot** - Density plot corroborates with the finding from the frequency plot - Most of the days the stock prices lied in between 0-100.
+
+**Density dot plot of the closing price shows how data is highly skewed**
+
+```{r}
+ggplot(tesla, aes(x = as.numeric(closing_price), y=..density..))+
+  geom_dotplot(binwidth = 3,method = 'histodot') +
+  labs(x = 'Closing Price') + 
+  theme_minimal()
+
+```
+##### Plot showing the increase in stock price of TESLA stock 
+
+```{r}
+ggplot(tesla, aes(x=date, y= as.numeric(closing_price), color = (closing_price >= 250))) + 
+  geom_point(show.legend = FALSE) +
+  labs(x = 'Time', y='Closing price') + 
+  theme_minimal()
+```
+
+In 2020, it crosed all expectations and had a steep growth to achieve an all time high of 250, and is no close to 1250 Rs per share
+
+**Summary Statistics**
+```{r}
+summary(tesla$closing_price)
+```
+We see a range of ~1225  in the stock price of Tesla. If we invested $100,000 @ $3.16 per share, we could have cashed out with $38,921,202 at the all time high.
+
+
+**Linear Model**
+```{r}
+attach(tesla)
+model <- lm(closing_price ~ date)
+summary(model)
+
+```
+#### Linear model inference: 
+
+1. The coffecient of date variable is 1.245e-01. This means that with every 1 unit increase in date variable there would be 1.245e-01 units
+increase in the stock price.
+2. The standard residual error in the model is 178.2 
+3. The R-squared value is  0.4209.
+4. The p-value is less than 0.05 for the t-statistic, hence, date could be an important feature hile pridicting stock price.
+
+
+
+
+**Checking autocorrelation and stationarity in the data - and increasing the stationarity to better predict the data generation process**
+
+
+
+
+#### Stationarity Check
+
+```{r fig.height = 5, fig.width = 10}
+library(ggplot2)
+
+ggplot(tesla, aes(x = date, y = closing_price)) +
+       geom_line()
+
+```
+
+##### ADF Test 
+We used the ADF test to check if the data is stationary
+Null Hypothesis: The data in *non stationary*
+
+```{r}
+##using library tseries
+adf.test(tesla$closing_price)
+
+```
+The observed p value is very high, hence we fail to reject the null hypothesis.
+The data is non-stationary.
+To confirm our findings we recheck using the KPSS Test
+
+
+
+##### KPSS Test**
+We used the KPSS test to recheck if the data is stationary
+Null Hypothesis: The data in *stationary*
+
+```{r}
+kpss.test(tesla$closing_price)
+
+```
+
+
+The observed p value is very low (<0.05), hence we reject the null hypothesis.
+The data is non-stationary.
+
+#### Transformations
+
+As the data is non-stationary, we perform transformations to get Constant Variance in the target variable.
+
+Log Transformation
+
+##### Log Transformation of Closing Price
+
+```{r fig.height = 5, fig.width = 10}
+
+tesla = tesla %>%
+  mutate(closing_price_log = log1p(closing_price))
+
+tesla %>%
+  ggplot() +
+      geom_line(aes(date,closing_price_log)) +
+      theme_bw() +
+      ggtitle("(Transformed)TClosing Price over Time ") +
+      ylab("Closing Price (Log(x))") +
+      xlab("Date")
+
+```
+
+```{r}
+##using library tseries
+adf.test(tesla$closing_price_log)
+
+```
+
+```{r}
+kpss.test(tesla$closing_price_log)
+
+```
+
+
+**The data is still Non-Stationary**
+
+#### Differencing to achieve constant mean
+
+```{r warning=FALSE, message=FALSE, fig.height = 5, fig.width = 10}
+
+tesla_final = tesla %>%
+  mutate(closing_price_diff_log = closing_price_log - lag(closing_price_log))
+
+tesla_final%>%
+  ggplot() +
+      geom_line(aes(date,closing_price_diff_log)) +
+      theme_bw() +
+      ggtitle("Closing Price (First Difference)") +
+      ylab("Differenced Closing Price (Difference))") +
+      xlab("Date")
+
+```
+*Wow! The differenced data looks perfectly mean reverting even though the variance seems fluctuating but still not much*
+
+
+
+##### Re-checking stationarity with the tests
+
+*Before testing we must remove the Na's caused due to differencing (one row will have Na in our case as we differenced the data once)
+
+```{r}
+tesla_final <- na.omit(tesla_final)
+```
+
+
+```{r}
+
+adf.test(tesla_final$closing_price_diff_log)
+
+```
+
+
+```{r}
+kpss.test(tesla_final$closing_price_diff_log)
+
+```
+
+*The data is now stationary*
+
+**We look at the ACF and PACF of the differenced data to estimate the data generating process**
+
+
+
+
+
+
+```{r fig.height = 5, fig.width = 10}
+
+par(mfrow = c(1,2))
+acf(tesla_final$closing_price_diff_log,lag.max=20)
+pacf(tesla_final$closing_price_diff_log,lag.max=20)
+
+```
+*The stock prices are usually a _random walk_, hence it is very tough to estimate the data generation process with ARIMA. We still try to model it using ARIMA to recheck *
+
+
+
+
+```{r fig.height = 5, fig.width = 10}
+
+arima(tesla_final$closing_price_diff_log,order=c(1,0,1),include.mean = FALSE)
+
+```
+```{r fig.height = 5, fig.width = 10}
+
+arima(tesla_final$closing_price_diff_log,order=c(2,0,1),include.mean = FALSE)
+
+```
+
+
+```{r fig.height = 5, fig.width = 10}
+
+arima(tesla_final$closing_price_diff_log,order=c(1,0,2),include.mean = FALSE)
+
+```
+
+
+```{r fig.height = 5, fig.width = 10}
+
+arima(tesla_final$closing_price_diff_log,order=c(5,1,2),include.mean = FALSE)
+
+```
+
+```{r fig.height = 5, fig.width = 10}
+
+# Run auto ARIMA on the non-differenced data
+auto_arima = auto.arima(tesla_final$closing_price)
+
+auto_arima
+```
+
+
+
+*Auto Arima stops at p=5 for non-differenced data; this might also be because that the default max value for p in auto arima function.*
+
+
+
+
+#### Auto ARIMA on the differenced data
+```{r fig.height = 5, fig.width = 10}
+
+# Run auto ARIMA on the differenced data
+auto_arima = auto.arima(tesla_final$closing_price_diff_log)
+
+auto_arima
+```
+##### Run auto ARIMA on the non-differenced data
+
+```{r fig.height = 5, fig.width = 10}
+auto_arima = auto.arima(tesla_final$closing_price_log,max.p = 7, max.q=7,max.order = 15)
+
+auto_arima
+```
+#### Checking Auto-correlation in the residuals
+
+```{r}
+
+best_mod = arima(tesla_final$closing_price_log,order=c(4,1,3))
+
+
+
+par(mfrow=c(1,2))
+resid = best_mod$resid
+acf(resid,lag.max=20)
+pacf(resid,lag.max=20)
+
+```
+*We see that there is no auto correlation in the residuals!*
+
+
+##### Ljung-Box test
+**Null Hypothesis: The time series is independent with no correlation**
+
+```{r fig.height = 5, fig.width = 10}
+Box.test(resid,type='Ljung-Box',lag=1)
+```
+
+
+```{r fig.height = 5, fig.width = 10}
+
+Box.test(resid,type='Ljung-Box',lag=5)
+```
+
+
+```{r fig.height = 5, fig.width = 10}
+
+Box.test(resid,type='Ljung-Box',lag=15)
+
+```
+**We fail to reject the null hypothesis, hence we there could be no correlation.**
+
+
+
+```{r fig.height = 5, fig.width = 10}
+
+tesla_final$resid = best_mod$residuals
+tesla_final$resid_invtransform=exp(tesla_final$resid)-1
+tesla_final$closingprice_invtransform=exp(tesla_final$closing_price_log)-1
+
+
+```
+
+
+```{r}
+head(tesla_final)
+```
+
+
+
+```{r fig.height = 5, fig.width = 10}
+
+
+
+
+tesla_final$pred =  tesla_final$closing_price -  tesla_final$resid_invtransform
+
+ggplot()+
+  geom_line(aes(tesla_final$date,tesla_final$closing_price),color='red')+
+  geom_line(aes(tesla_final$date,tesla_final$pred),color='blue',alpha=0.4)+
+  theme_bw()+
+  xlab("Date")+
+  ylab("Closing Price ")
+
+```
+
+```{r}
+
+RMSE = sqrt(mean((tesla_final$pred - tesla_final$closing_price)^2,na.rm=T))
+RMSE
+
+```
+
+
+```{r}
+
+  best_mod %>%
+  forecast(h=30)  %>%
+autoplot()
+
+```
+#### Inverse Transform
+The forecasts are in log transformed values we inverse them to attain real stock price values
+  
+```{r fig.height = 5, fig.width = 10}
+
+ forecast= best_mod %>%
+  forecast(h=30)  
+
+```
+
+
+
+```{r fig.height = 5, fig.width = 10}
+
+forecast$mean=exp(forecast$mean)-1
+forecast$fitted=exp(forecast$fitted)-1
+forecast$x=exp(forecast$x)-1
+
+
+autoplot(forecast)
+```
+(please ignore the Y axis label - it is actual stock price and not the log transformation)
+
+**We have derived the forecasted closing price for the next 30 days!**
+
+
